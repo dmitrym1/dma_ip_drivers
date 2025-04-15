@@ -54,6 +54,32 @@ MODULE_PARM_DESC(desc_blen_max,
 
 #define XDMA_PERF_NUM_DESC 128
 
+/* Functions:
+   * wait_event_interruptible_timeout
+   * swait_event_interruptible_timeout_exclusive
+   * wait_event_interruptible
+   * swait_event_interruptible_exclusive
+   could return prematurely (-ERESTARTSYS) if interrupted by a signal, this case must be handled by kernel module */
+#define xlx_wait_event_interruptible_timeout(wq, condition, timeout) \
+({\
+	int __ret = 0;  \
+	unsigned long expire = timeout + jiffies; \
+	do { \
+		__ret = _xlx_wait_event_interruptible_timeout(wq, condition, \
+							timeout); \
+	} while ((__ret < 0) && (jiffies < expire)); \
+       __ret; \
+})
+
+#define xlx_wait_event_interruptible(wq, condition) \
+({\
+	int __ret = 0;  \
+	do { \
+		__ret = _xlx_wait_event_interruptible(wq, condition); \
+	} while (__ret < 0); \
+       __ret; \
+})
+
 /* Kernel version adaptative code */
 #if HAS_SWAKE_UP_ONE
 /* since 4.18, using simple wait queues is not recommended
@@ -61,31 +87,21 @@ MODULE_PARM_DESC(desc_blen_max,
  * and will likely be removed in future kernel versions
  */
 #define xlx_wake_up	swake_up_one
-#define xlx_wait_event_interruptible_timeout \
+#define _xlx_wait_event_interruptible_timeout \
 			swait_event_interruptible_timeout_exclusive
-#define xlx_wait_event_interruptible \
+#define _xlx_wait_event_interruptible \
 			swait_event_interruptible_exclusive
 #elif HAS_SWAKE_UP
 #define xlx_wake_up	swake_up
-#define xlx_wait_event_interruptible_timeout \
+#define _xlx_wait_event_interruptible_timeout \
 			swait_event_interruptible_timeout
-#define xlx_wait_event_interruptible \
+#define _xlx_wait_event_interruptible \
 			swait_event_interruptible
 #else
 #define xlx_wake_up	wake_up_interruptible
-/* wait_event_interruptible_timeout() could return prematurely (-ERESTARTSYS)
- * if it is interrupted by a signal */
-#define xlx_wait_event_interruptible_timeout(wq, condition, timeout) \
-({\
-	int __ret = 0;  \
-	unsigned long expire = timeout + jiffies; \
-	do { \
-		__ret = wait_event_interruptible_timeout(wq, condition, \
-							timeout); \
-	} while ((__ret < 0) && (jiffies < expire)); \
-       __ret; \
-})
-#define xlx_wait_event_interruptible \
+#define _xlx_wait_event_interruptible_timeout \
+           wait_event_interruptible_timeout
+#define _xlx_wait_event_interruptible \
 			wait_event_interruptible
 #endif
 
@@ -413,11 +429,11 @@ static int engine_reg_dump(struct xdma_engine *engine)
 static void engine_status_dump(struct xdma_engine *engine)
 {
 	u32 v = engine->status;
-	char buffer[256];
+	char buffer[400];
 	char *buf = buffer;
 	int len = 0;
 
-	len = sprintf(buf, "SG engine %s status: 0x%08x: ", engine->name, v);
+	len = sprintf(buf, "SG engine %.16s status: 0x%08x: ", engine->name, v);
 
 	if ((v & XDMA_STAT_BUSY))
 		len += sprintf(buf + len, "BUSY,");
@@ -433,7 +449,7 @@ static void engine_status_dump(struct xdma_engine *engine)
 		if ((v & XDMA_STAT_MAGIC_STOPPED))
 			len += sprintf(buf + len, "MAGIC_STOPPED ");
 		if ((v & XDMA_STAT_INVALID_LEN))
-			len += sprintf(buf + len, "INVLIAD_LEN ");
+			len += sprintf(buf + len, "INVALID_LEN ");
 		if ((v & XDMA_STAT_IDLE_STOPPED))
 			len += sprintf(buf + len, "IDLE_STOPPED ");
 		buf[len - 1] = ',';
@@ -3424,7 +3440,7 @@ ssize_t xdma_xfer_aperture(struct xdma_engine *engine, bool write, u64 ep_addr,
 			transfer_dump(xfer);
 			sgt_dump(sgt);
 #endif
-			rv = -ERESTARTSYS;
+			rv = -ETIMEDOUT;
 			break;
 		}
 
@@ -3654,7 +3670,7 @@ ssize_t xdma_xfer_submit(void *dev_hndl, int channel, bool write, u64 ep_addr,
 			transfer_dump(xfer);
 			sgt_dump(sgt);
 #endif
-			rv = -ERESTARTSYS;
+			rv = -ETIMEDOUT;
 			break;
 		}
 
@@ -3785,7 +3801,7 @@ ssize_t xdma_xfer_completion(void *cb_hndl, void *dev_hndl, int channel,
 			transfer_dump(xfer);
 			sgt_dump(sgt);
 #endif
-			rv = -ERESTARTSYS;
+			rv = -ETIMEDOUT;
 			break;
 		}
 
