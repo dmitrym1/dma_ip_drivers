@@ -115,8 +115,8 @@ static long version_ioctl(struct xdma_cdev *xcdev, void __user *arg)
 	obj.subsystem_device = xdev->pdev->subsystem_device;
 	obj.feature_id = xdev->feature_id;
 	obj.driver_version = DRV_MOD_VERSION_NUMBER;
-	obj.domain = xdev->pdev->slot->number;
-	obj.bus = xdev->pdev->bus->number;
+	obj.domain = 0;
+	obj.bus = PCI_BUS_NUM(xdev->pdev->devfn);
 	obj.dev = PCI_SLOT(xdev->pdev->devfn);
 	obj.func = PCI_FUNC(xdev->pdev->devfn);
 	if (copy_to_user(arg, &obj, sizeof(struct xdma_ioc_info)))
@@ -194,9 +194,9 @@ int bridge_mmap(struct file *file, struct vm_area_struct *vma)
 	struct xdma_dev *xdev;
 	struct xdma_cdev *xcdev = (struct xdma_cdev *)file->private_data;
 	unsigned long off;
-	resource_size_t phys;
+	unsigned long phys;
 	unsigned long vsize;
-	resource_size_t psize;
+	unsigned long psize;
 	int rv;
 
 	rv = xcdev_check(__func__, xcdev, 0);
@@ -233,12 +233,17 @@ int bridge_mmap(struct file *file, struct vm_area_struct *vma)
 	 * prevent touching the pages (byte access) for swap-in,
 	 * and prevent the pages from being swapped out
 	 */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+        vm_flags_set(vma, VMEM_FLAGS);
+#elif defined(RHEL_RELEASE_CODE)
+	#if (RHEL_RELEASE_CODE > RHEL_RELEASE_VERSION(9, 4))
+        vm_flags_set(vma, VMEM_FLAGS);
+	#else
 	vma->vm_flags |= VMEM_FLAGS;
+	#endif
 #else
-	vm_flags_set(vma, VMEM_FLAGS);
+	vma->vm_flags |= VMEM_FLAGS;
 #endif
-
 	/* make MMIO accessible to user space */
 	rv = io_remap_pfn_range(vma, vma->vm_start, phys >> PAGE_SHIFT,
 			vsize, vma->vm_page_prot);

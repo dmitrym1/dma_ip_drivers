@@ -2,7 +2,7 @@
  * This file is part of the Xilinx DMA IP Core driver for Linux
  *
  * Copyright (c) 2017-2022, Xilinx, Inc. All rights reserved.
- * Copyright (c) 2022, Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (c) 2022-2024, Advanced Micro Devices, Inc. All rights reserved.
  *
  * This source code is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -305,7 +305,11 @@ int xdev_list_dump(char *buf, int buflen)
 	mutex_lock(&xdev_mutex);
 	list_for_each_entry_safe(xdev, tmp, &xdev_list, list_head) {
 		len += snprintf(buf + len, buflen - len,
+#ifdef CONFIG_PCI_DOMAINS_GENERIC
+				"qdma%09x\t%02x:%02x.%02x\n",
+#else
 				"qdma%05x\t%02x:%02x.%02x\n",
+#endif
 				xdev->conf.bdf, xdev->conf.pdev->bus->number,
 				PCI_SLOT(xdev->conf.pdev->devfn),
 				PCI_FUNC(xdev->conf.pdev->devfn));
@@ -334,9 +338,13 @@ static inline void xdev_list_add(struct xlnx_dma_dev *xdev)
 	u32 last_dev = 0;
 
 	mutex_lock(&xdev_mutex);
-	bdf = ((xdev->conf.pdev->bus->number << PCI_SHIFT_BUS) |
-			(PCI_SLOT(xdev->conf.pdev->devfn) << PCI_SHIFT_DEV) |
-			PCI_FUNC(xdev->conf.pdev->devfn));
+	bdf = (
+#ifdef CONFIG_PCI_DOMAINS_GENERIC
+		(xdev->conf.pdev->bus->domain_nr << PCI_SHIFT_DOMAIN) |
+#endif
+		(xdev->conf.pdev->bus->number << PCI_SHIFT_BUS) |
+		(PCI_SLOT(xdev->conf.pdev->devfn) << PCI_SHIFT_DEV) |
+		PCI_FUNC(xdev->conf.pdev->devfn));
 	xdev->conf.bdf = bdf;
 	list_add_tail(&xdev->list_head, &xdev_list);
 
@@ -535,6 +543,7 @@ static int xdev_map_bars(struct xlnx_dma_dev *xdev, struct pci_dev *pdev)
 static int xdev_identify_bars(struct xlnx_dma_dev *xdev, struct pci_dev *pdev)
 {
 	int bar_idx = 0;
+	int rv = 0;
 	u8 num_bars_present = 0;
 	int bar_id_list[QDMA_BAR_NUM];
 	int bar_id_idx = 0;
@@ -553,7 +562,6 @@ static int xdev_identify_bars(struct xlnx_dma_dev *xdev, struct pci_dev *pdev)
 	}
 
 	if (num_bars_present > 1) {
-		int rv = 0;
 
 		/* AXI Master Lite BAR IDENTIFICATION */
 		if ((xdev->version_info.ip_type == QDMA_VERSAL_HARD_IP) &&
@@ -598,7 +606,7 @@ static int xdev_identify_bars(struct xlnx_dma_dev *xdev, struct pci_dev *pdev)
 			}
 		}
 	}
-	return 0;
+	return rv;
 }
 
 /*****************************************************************************/
@@ -1052,7 +1060,11 @@ int qdma_device_open(const char *mod_name, struct qdma_dev_conf *conf,
 	xdev_list_add(xdev);
 
 	rv = snprintf(xdev->conf.name, QDMA_DEV_NAME_MAXLEN,
+#ifdef CONFIG_PCI_DOMAINS_GENERIC
+		"qdma%09x-p%s",
+#else
 		"qdma%05x-p%s",
+#endif
 		xdev->conf.bdf, dev_name(&xdev->conf.pdev->dev));
 	xdev->conf.name[rv] = '\0';
 
@@ -1103,9 +1115,6 @@ int qdma_device_open(const char *mod_name, struct qdma_dev_conf *conf,
 	if (rv != QDMA_SUCCESS)
 		goto unmap_bars;
 #endif
-
-	pr_info("Vivado version = %s\n",
-			xdev->version_info.qdma_vivado_release_id_str);
 
 #ifndef __QDMA_VF__
 	rv = xdev->hw.qdma_get_function_number(xdev, &xdev->func_id);
@@ -1167,7 +1176,7 @@ int qdma_device_open(const char *mod_name, struct qdma_dev_conf *conf,
 	}
 
 	rv = xdev_identify_bars(xdev, pdev);
-	if (rv) {
+	if (rv < 0) {
 		pr_err("Failed to identify bars, err %d", rv);
 		goto unmap_bars;
 	}
@@ -1185,7 +1194,7 @@ int qdma_device_open(const char *mod_name, struct qdma_dev_conf *conf,
 
 	*dev_hndl = (unsigned long)xdev;
 
-	return 0;
+	return rv;
 
 cleanup_qdma:
 	qdma_device_offline(pdev, (unsigned long)xdev, XDEV_FLR_INACTIVE);
